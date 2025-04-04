@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <link rel="icon" type="image/png" sizes="32x32"
+        href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACLklEQVRYR+2WO4oCQRCGa3yhIpr4zgxUEB8HMPUAmmgiIoiJJ/AGegkfGJl5CNHcwMjIwMTEVFDstQammUf3WDMsLAtWtj3VVV//f3e5CvxxKH/cH74A/0+B0+nE8vn8r4GTCx2PRxYIBPidfTweUCqVyPtll/1jATyxeXO/3+dLu93uYw27lybdvNlsWLlc5nsVRYFutwter1dYzy2IEMB8ao/HA71ejzQynIIYAMynRp+Hw6Ha+PV6AYJgMMYAFZEF5m23W5I1PMl8ar3PlKYiGIoaKsB0OmXNZlP1F332+XwkualJdiAcAIvNZjOIx+NcamoDSh7att/vLbYYAObzOfc3kUjY1sU7gEXdhF4RiwL6gghhd9mcNl8sFryeNk25JHgP0AJRpNNp9RW4jclkAplMhm/H13W73aBerxvfUqVSYff7XdgH5U4mk44UwVrr9dpQ73w+QygUUtcsAFrmWx6puZFIBMLhsK0YqNZqtTLk+P1+uFwuhjUpAAUkm83C8/m0gCyXS8OaJreI+CMABQRtwcD50Wg0LD7LpMLm+I00LjHRzhacmu12W+2FrwZ9DgaDwt6HwwFGoxHvSwawU2MwGKifY7EYVKtV6f3QTq1PcAwgAtEAotEo1Go1IYCouSMLRFXf/xExvGQaQKFQgFQqxVPfv4gwHo9tD+laAT0QDjH8u1gsqrPier1Cq9Ui1SYlSU3VfUCIXC4HnU7HUU1HyRQQpzlfgK8CPws/xyHWEO5ZAAAAAElFTkSuQmCC">
+    <title>Component Boxes</title>
+    <style>
+        #box {
+            border-collapse: collapse;
+            border: 1px solid #000;
+        }
+
+        #box td {
+            border: 1px solid #000;
+        }
+
+        #box td.highlight {
+            background-color: #0f0;
+        }
+
+        #box p {
+            margin: 0;
+        }
+
+        #box[normalized=true] p.box-text {
+            display: none;
+        }
+
+        #box[normalized=false] p.box-value {
+            display: none;
+        }
+    </style>
+    <script>
+        /*
+        Syntax:
+        components ::= (component-row "\n")* component-row
+        component-row ::= ((component ",")* component) | header
+        header ::= (any character other than "," and "\n")*
+        component ::= value prefix units (" " comment)?
+        value ::= decimal number
+        prefix ::= "M" | "k" | "" | "m" | "u" | "n" | "p"
+        units ::= "" | "F" | "H"
+        comment ::= (any character other than "," and "\n")*
+
+        Example:
+        `box 2
+        5MF 50V,0.5uF text,5F
+        box 1
+        220 5%,12k 10%,50mH`
+        */
+        var components = `5MF 50V,0.5uF text,5F
+box 2
+220 5%,12k 10%,50mH`;
+
+        const PREFIXES = {
+            "M": 1e6,
+            "k": 1e3,
+            "": 1,
+            "m": 1e-3,
+            "u": 1e-6,
+            "n": 1e-9,
+            "p": 1e-12,
+        };
+
+        const UNIT = {
+            Ohm: "\u03A9",
+            Farad: "F",
+            Henry: "H",
+        };
+
+        const UNIT_SYMBOLS = {
+            "": UNIT.Ohm,
+            "F": UNIT.Farad,
+            "H": UNIT.Henry,
+        };
+
+        const INPUT_REPLACEMENTS = {
+            "K": "k",
+            "U": "u",
+            "\u03BC": "u",
+            "\u00B5": "u",
+            "N": "n",
+            "P": "p",
+            "\u03A9": "",
+            "\u2126": "",
+            "f": "F",
+            "h": "H",
+        };
+
+        function replaceInput(input) {
+            return input.replace(RegExp("[" + Object.keys(INPUT_REPLACEMENTS).join() + "]", "g"), m => INPUT_REPLACEMENTS[m]);
+        }
+
+        // Return `value` if `value` not undefined else `default_`.
+        function undefDefault(value, default_) {
+            return value === undefined ? default_ : value;
+        }
+
+        // Round `value` to `decimals` places.
+        function round(value, decimals) {
+            return Number(Math.round(value + 'e' + decimals) + 'e-' + decimals);
+        }
+
+        class Component {
+            constructor(row, col, text) {
+                this.row = row;
+                this.col = col;
+
+                // Parse text.
+                let match = text.match(/^((\d*(\.\d+)|\d+)(M|k|m|u|n|p)?)(F|H)?( ([^,\n]*))?$/);
+                if (match === null) {
+                    this.text = "INVALAD";
+                    this.value = 0;
+                    this.unit = UNIT.Ohm;
+                    this.comment = "";
+                } else {
+                    this.text = undefDefault(match[1], "INVALID");
+                    let value = parseFloat(undefDefault(match[2], "0"));
+                    let prefix = PREFIXES[undefDefault(match[4], "")];
+                    this.value = value * prefix;
+                    this.unit = UNIT_SYMBOLS[undefDefault(match[5], "")];
+                    this.comment = undefDefault(match[7], "\u00A0");
+                }
+            }
+
+            normalizedValue() {
+                // Sort prefixes in order of decreasing magnitude.
+                let prefix_values = Object.entries(PREFIXES).sort((value1, value2) => value1[1] < value2[1]);
+                // Get `[prefix, value]` for the largest prefix less than `this.value`.
+                let prefix_value = undefDefault(prefix_values.find(prefix_value => this.value >= prefix_value[1]), prefix_values[prefix_values.length - 1]);
+                // Calculate value with prefix.
+                let value = this.value / prefix_value[1];
+                // Return formatted normalized value.
+                return (+value.toFixed(5)) + prefix_value[0] + this.unit;
+            }
+        }
+
+        let componentData = [];
+        let componentCells = [];
+        addEventListener("load", _ => {
+            // Build table.
+            let box = document.getElementById("box");
+            let headerCells = [];
+            let columns = 0;
+            // Clear `box` children.
+            box.replaceChildren();
+            // For each row of `components`...
+            components.split("\n").forEach((componentRow, row, _) => {
+                // For each cell of the row of `components`...
+                if (componentRow.includes(",")) {
+                    // Create new table row.
+                    let domRow = document.createElement("tr");
+
+                    componentRow.split(",").forEach((componentText, col, _) => {
+                        if (col + 1 > columns) {
+                            columns = col + 1;
+                        }
+
+                        // Parse component text.
+                        let component = new Component(row, col, componentText);
+                        componentData.push(component);
+                        // Create cell.
+                        let domCell = document.createElement("td");
+                        let domText = document.createElement("p");
+                        domText.className = "box-text";
+                        domText.textContent = component.text + component.unit;
+                        domCell.appendChild(domText);
+                        let domValue = document.createElement("p");
+                        domValue.className = "box-value";
+                        domValue.textContent = component.normalizedValue();
+                        domCell.appendChild(domValue);
+                        let domComment = document.createElement("p");
+                        domComment.textContent = component.comment;
+                        domCell.appendChild(domComment);
+                        domRow.appendChild(domCell);
+                        componentCells.push(domCell);
+                    });
+                    box.appendChild(domRow);
+                } else {
+                    // Create new table header.
+                    let domHeader = document.createElement("tr");
+                    let domCell = document.createElement("th");
+                    let domText = document.createElement("p");
+                    domText.textContent = componentRow;
+                    domCell.appendChild(domText);
+                    domHeader.appendChild(domCell);
+                    headerCells.push(domCell);
+                    box.appendChild(domHeader);
+                }
+            });
+
+            document.querySelectorAll("#box tr th").forEach(domHeader => domHeader.setAttribute("colspan", columns.toString()));
+
+            // Enable normalize checkbox.
+            let normalizeInput = document.getElementById("normalize");
+            box.setAttribute("normalized", normalizeInput.checked ? "true" : "false");
+            normalizeInput.addEventListener("click", () => {
+                box.setAttribute("normalized", normalizeInput.checked ? "true" : "false");
+            });
+
+            // Enable search bar.
+            let searchInput = document.getElementById("search");
+            searchInput.value = replaceInput(searchInput.value);
+            searchInput.style.backgroundColor = search(searchInput.value, 0.0001) ? "none" : "#ff0";
+            searchInput.addEventListener("input", () => {
+                searchInput.value = replaceInput(searchInput.value);
+                searchInput.style.backgroundColor = search(searchInput.value, 0.0001) ? "none" : "#ff0";
+            });
+        });
+
+        // Find the components closest to `text` where `epsilonFactor` specifies the tolerance.
+        function search(text, epsilonFactor) {
+            let match = text.match(/^(\d*(\.\d+)|\d+)(M|k|m|u|n|p)?(F|H)?$/);
+            if (match === null) {
+                componentCells.forEach(domCell => domCell.className = "");
+                return false;
+            }
+            let value = parseFloat(undefDefault(match[1], "0")) * PREFIXES[undefDefault(match[3], "")];
+            let unit = UNIT_SYMBOLS[undefDefault(match[4], "")];
+            // How far apart `values` can be while still being considered the same.
+            let epsilon = value * epsilonFactor;
+
+            // Find value closest to `text`.
+            let closestValue = Infinity;
+            let minDelta = Infinity;
+            for (let i = 0; i < componentData.length; i++) {
+                if (unit === componentData[i].unit) {
+                    let delta = Math.abs(componentData[i].value - value);
+                    if (delta < minDelta) {
+                        minDelta = delta;
+                        closestValue = componentData[i].value;
+                    }
+                }
+            }
+
+            // Find components that are considered to have the same value as `closestValue`.
+            for (let i = 0; i < componentData.length; i++) {
+                if (unit === componentData[i].unit && Math.abs(componentData[i].value - closestValue) <= epsilon) {
+                    componentCells[i].className = "highlight";
+                } else {
+                    componentCells[i].className = "";
+                }
+            }
+            return true;
+        }
+    </script>
+</head>
+
+<body>
+    <img style="image-rendering: pixelated; width:10%"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACLklEQVRYR+2WO4oCQRCGa3yhIpr4zgxUEB8HMPUAmmgiIoiJJ/AGegkfGJl5CNHcwMjIwMTEVFDstQammUf3WDMsLAtWtj3VVV//f3e5CvxxKH/cH74A/0+B0+nE8vn8r4GTCx2PRxYIBPidfTweUCqVyPtll/1jATyxeXO/3+dLu93uYw27lybdvNlsWLlc5nsVRYFutwter1dYzy2IEMB8ao/HA71ejzQynIIYAMynRp+Hw6Ha+PV6AYJgMMYAFZEF5m23W5I1PMl8ar3PlKYiGIoaKsB0OmXNZlP1F332+XwkualJdiAcAIvNZjOIx+NcamoDSh7att/vLbYYAObzOfc3kUjY1sU7gEXdhF4RiwL6gghhd9mcNl8sFryeNk25JHgP0AJRpNNp9RW4jclkAplMhm/H13W73aBerxvfUqVSYff7XdgH5U4mk44UwVrr9dpQ73w+QygUUtcsAFrmWx6puZFIBMLhsK0YqNZqtTLk+P1+uFwuhjUpAAUkm83C8/m0gCyXS8OaJreI+CMABQRtwcD50Wg0LD7LpMLm+I00LjHRzhacmu12W+2FrwZ9DgaDwt6HwwFGoxHvSwawU2MwGKifY7EYVKtV6f3QTq1PcAwgAtEAotEo1Go1IYCouSMLRFXf/xExvGQaQKFQgFQqxVPfv4gwHo9tD+laAT0QDjH8u1gsqrPier1Cq9Ui1SYlSU3VfUCIXC4HnU7HUU1HyRQQpzlfgK8CPws/xyHWEO5ZAAAAAElFTkSuQmCC">
+    <h1>Component Box Search</h1>
+    <pre>Supported Prefixes
+M mega  1000000
+k kilo     1000
+  none        1
+m milli       0.001
+u micro       0.000001
+n nano        0.000000001
+p pico        0.000000000001
+
+Supported Units
+  Ohms  Resistance
+F Farad Capacitance
+H Henry Inductance</pre>
+    <label for="normalize">Normalize Table</label><input type="checkbox" id="normalize"><br>
+    <label for="search">Search</label><input type="text" id="search" placeholder="220k, 50uF">
+    <table id="box"></table>
+</body>
+
+</html>
